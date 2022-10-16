@@ -4,34 +4,36 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/go-git/go-billy/v5/memfs"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/storage/memory"
 )
 
-func gitIt(untappd []byte) error {
+func gitIt(user string, untappd []byte) error {
 	storage := memory.NewStorage()
 	fs := memfs.New()
 
 	fmt.Println("git clone next")
 	repository, err := git.Clone(storage, fs, &git.CloneOptions{
 		URL: "https://github.com/Kyrremann/beers",
-		//Auth: &http.BasicAuth{
-		//	Username: "x-token", // anything except an empty string
-		//	Password: "",
-		//},
+		Auth: &githttp.BasicAuth{
+			Username: "x-token",
+			Password: os.Getenv("github_path"),
+		},
 		Progress: os.Stdout,
 	})
 	if err != nil {
 		return err
 	}
-	fmt.Println("git clone done")
 
-	file, err := fs.Create("dat1.txt")
+	fileName := fmt.Sprintf("%s.json", user)
+	file, err := fs.Create(fileName)
 	if err != nil {
 		return err
 	}
@@ -42,15 +44,15 @@ func gitIt(untappd []byte) error {
 	}
 
 	worktree, err := repository.Worktree()
-	_, err = worktree.Add("dat1.txt")
+	_, err = worktree.Add(fileName)
 	if err != nil {
 		return err
 	}
 
-	_, err = worktree.Commit("Test", &git.CommitOptions{
+	_, err = worktree.Commit(fmt.Sprintf("New data for %s", user), &git.CommitOptions{
 		Author: &object.Signature{
-			Name:  "Kyrremann",
-			Email: "Kyrremann@gmail.com",
+			Name:  "Beers CI",
+			Email: "beers-function@users.noreply.github.com",
 		},
 	})
 	if err != nil {
@@ -73,16 +75,24 @@ func handler(request events.APIGatewayProxyRequest) (*events.APIGatewayProxyResp
 		}, nil
 	}
 
-	user := request.Headers["user-token"]
-	fmt.Println(user)
-	if user == "" {
+	user := strings.ToLower(request.Headers["user"])
+	userToken := request.Headers["user-token"]
+	if userToken == "" || user == "" {
 		return &events.APIGatewayProxyResponse{
 			StatusCode: http.StatusBadRequest,
-			Body:       "Missing user-token",
+			Body:       "Missing user or user-token",
 		}, nil
 	}
 
-	err := gitIt([]byte(request.Body))
+	controlUserToken := os.Getenv(user)
+	if controlUserToken != userToken {
+		return &events.APIGatewayProxyResponse{
+			StatusCode: http.StatusBadRequest,
+			Body:       "Wrong user-token",
+		}, nil
+	}
+
+	err := gitIt(user, []byte(request.Body))
 	if err != nil {
 		return nil, err
 	}
